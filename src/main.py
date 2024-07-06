@@ -9,9 +9,10 @@ from typing import Final
 import re
 from datetime import datetime, timedelta
 
-
+############## Remove comment if you deploy the app into a platform that might run multiple instance ##############
 # The following commands ensure that the code runs only once, even if deployed on a platform with multiple instances.
 # This guarantees that the backup code executes in case the app crashes.
+
 
 # file_init = "working.txt"
 # def write_message(file_init):
@@ -44,8 +45,9 @@ from datetime import datetime, timedelta
 #             temp  = current_time.strftime("%Y-%m-%d %H:%M:%S")
 #             print("sleeping " + temp + " " + time_difference_str)
 #             time.sleep(10)
+############## Remove comment if you deploy the app into a platform that might run multiple instance ##############
 
-# This is a standard variable that will be used in the app
+#### Unchanged variables #### 
 TOKEN: Final = "ENTER_YOUR_TOKEN"
 div_class: Final = 'ENTER DIV NAME TO KEEP THE TRACK ON IF IT GOT REMOVED'
 
@@ -58,59 +60,95 @@ nameURL: Final = [
     'Enter the name of the tracker in order of the url above'
 ]
 
-
 currentTime = datetime.now().strftime("%m/%d/%Y, %H:%M:%S")
 product = []
+tasks = {}
+
+file_name = 'status.txt'
+file_found = 'founded.txt'
+#### Unchanged variables #### 
 
 for i, url in enumerate(urls):
     tempProduct = f"{urls[i]} {nameURL[i]} {currentTime} init"
     product.append(tempProduct)
 
-file_name = 'status.txt'
-file_found = 'founded.txt'
 
-# Def is responsable to initialize all the thread for each URL to track and init initialize.
-async def init_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks = [finder(url, index, update, context) for index, url in enumerate(urls)]
-    tasks.append(logs())
-    tasks.append(monitor_threads(update, context))
-    await asyncio.gather(*tasks)
-    print("All tasks initialized.")
-    await update.message.reply_text("All tasks initialized.")
 
-# Finder def is a infinite loop that monitor the site if got change.
+# Def is responsable for:
+# - loop url: Initialize all tracker thread for each URL.
+# - Logs: each tracker and print it in terminal to identify in case one of the thread acts unusual.
+# - Monitor: thread to monitor all threads in case it fail, it will reinit the thread to keep it alive.
+async def init_tasks(update: Update = None, context: ContextTypes.DEFAULT_TYPE = None):
+    for index, url in enumerate(urls):
+        tasks[url] = asyncio.create_task(finder(url, index, update, context))
+    tasks['logs'] = asyncio.create_task(logs())
+    tasks['monitor'] = asyncio.create_task(monitor_threads(update, context))
+    if update:
+        await update.message.reply_text("All tasks initialized.")
+
+# Finder def is a infinite loop that monitor the site if got change and sleep in certian time based on the result.
+# Responsable for the following:
+# - Send an http request to the url given in "searchURL" def and it will return a boolean:
+#   - True  = div found.
+#       - Thread will sleep for 30 sec.
+#   - False = div not found.
+#       - Notify the users in Telegram.
+#       - Start "afterFinding" def in order to notify the user in case the URL changed back.
+#       - Sleep for 600 sec.
+#   - None  = HTTP request failed
 async def finder(url, index, update: Update, context: ContextTypes.DEFAULT_TYPE):
     while True:
         print(f"Finding... {url}")
         currTime = datetime.now().strftime("%m/%d/%Y, %H:%M:%S")
         dummy = await searchURL(url)
         print(index, url, dummy)
-        if dummy:
-            changeContext(index, f"{url} {nameURL[index]} {currTime} Not Found")
+        if dummy == True:
+            changeContext(index, f"{url} \t\t {currTime} Not Found")
             await asyncio.sleep(30)
-        else:
-            await update.message.reply_text(f'Product found:  {nameURL[index]} \n {url}')
-            changeContext(index,  f"{url} {nameURL[index]} {currTime} Found")
+        elif dummy == False:
+            if update:
+                await update.message.reply_text(f'Product found:  {nameURL[index]} \n {url}')
+            changeContext(index,  f"{url} \t\t {currTime} Found")
             await writeFounded(f'Product found:  {nameURL[index]}:  {url}')
+            await asyncio.sleep(30)
+            asyncio.create_task(finderAfter(url, index, update, context))
             await asyncio.sleep(600)
+
+# Notify the user in case the URL changed back.
+async def finderAfter(url, index, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    while True:
+        print(f"[AFTER] Finding... ", url)
+        dummy = await searchURL(url)
+        print("--------", index, url, dummy)
+        if dummy:
+            if update:
+                await update.message.reply_text(f'❌❌❌ \n [Site changed back]  {nameURL[index]}')
+                print(f'[OUT OF STOCK] Product:  {nameURL[index]}   {url}  {dummy}')
+                return
+        await asyncio.sleep(15)
 
 # searchURL def is responsable to send a HTTP Request to the url and sent the result back to finder
 async def searchURL(url):
-    await asyncio.sleep(5)
-    response = requests.get(url)
-    found = True
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.content, 'html.parser')
-        div = soup.find('div', class_=div_class)
-        if div:
-            context = div.get_text(strip=True)
-            print(context)
-        else:
-            found = False
-            print("Div not found.")
-    else:
-        print("Failed to retrieve URL:", response.status_code)
-    return found
+    retries = 3
+    delay = 2
+    async with aiohttp.ClientSession() as session:
+        for attempt in range(retries):
+            try:
+                async with session.get(url, timeout=10) as response:
+                    if response.status == 200:
+                        soup = BeautifulSoup(await response.text(), 'html.parser')
+                        div = soup.find('div', class_=div_class)
+                        if div:
+                            context = div.get_text(strip=True)
+                            print(f' {url} - {context}')
+                            return True
+                        else:
+                            print(f'[Found] {response.status} - {url}')
+                            return False
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                print(f"Request failed (attempt {attempt + 1}): {e}")
+                await asyncio.sleep(delay)
+        return None
 
 # cchangeContext def used to log to the status.txt to make sure each thread is working find
 def changeContext(index, text):
@@ -160,17 +198,24 @@ async def statusBuilder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
 # Logs def to make sure that the code is working and each thread is working from terminal. 
 async def logs():
-    try:
-        with open(file_name, 'r', encoding='utf-8') as file:
-            while True:
-                lines = file.readline()
-                if len(lines) >= 2:
-                    print("[logs file]: " + lines)
-                else:
-                    await asyncio.sleep(30)
-                
-    except FileNotFoundError:
-        return "Need to be fixed!!!"
+    currLogs = []
+    print("Logs is init!!!")
+    await asyncio.sleep(20)
+    while True:
+        try:
+            with open(file_name, 'r', encoding='utf-8') as file:
+                while True:
+                    lines = file.readline()
+                    if len(lines) >= 2:
+                        currLogs.append(lines)
+                    else:
+                        break
+        except FileNotFoundError:
+            return "Need to be fixed!!!"
+        
+        print(f'[STARTLOGS]\n{currLogs}\n[END LOGS]')
+        currLogs = []
+        await asyncio.sleep(120)
 
 # In case if one of the URL is change it will log to founded.txt with the time found.
 async def writeFounded(content):
@@ -185,51 +230,45 @@ async def writeFounded(content):
 # Monitor each thread if the thread is broken it will try to create new thread without human involve or needed to restart the app
 async def monitor_threads(update: Update, context: ContextTypes.DEFAULT_TYPE):
     while True:
-        statusBuilterStr = await statusBuilder(update, context)
-        print(statusBuilterStr)
-        if "Need to be restarted" in statusBuilterStr:
-            for line in statusBuilterStr.split('\n')[1:]:
-                if line:
-                    url = line.split()[-1]
+        for url, task in tasks.items():
+            if task.done() or task.cancelled():
+                print("----------------------FIXING: {url} ---------------------")
+                print("---[Before]---", task)
+                print(f'Task for {url} is not running. Restarting...')
+                if(url == "logs"):
+                    tasks[url] = asyncio.create_task(logs())
+                else:
                     index = urls.index(url)
-                    # asyncio.create_task(finder(urls[index], index, update, context))
-        await asyncio.sleep(60)
+                    tasks[url] = asyncio.create_task(finder(url, index, update, context))
+                    print("---[After]---", tasks[url])
+        await asyncio.sleep(90)
 
 # TELEGRAM COMMANDS 
-async def fixBrokenThreads(index, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.gather(finder(urls[index], index, update, context))
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Hello! Use /track to start tracking.')
 
 async def track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    asyncio.create_task(init_tasks(update, context))
+    await init_tasks(update, context)
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     statusBuilterStr = await statusBuilder(update, context)
     print(statusBuilterStr)
     await update.message.reply_text(statusBuilterStr)
 
-# Handle user messages from telegram.
-# You can use this based on user input.
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_message = update.message.text
-
 
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
 
-    # In case if you want to add more commands you need to add the handler below
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("track", track))
     application.add_handler(CommandHandler("status", status))
-
-    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+    
     print("Polling...")
     application.run_polling()
 
 if __name__ == '__main__':
-    checkIfThereIsInstance()
     asyncio.run(main())
+
