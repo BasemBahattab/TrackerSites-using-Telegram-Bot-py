@@ -7,7 +7,7 @@ This script monitors specified URLs and checks for changes in specified HTML ele
 - Python 3.7+
 - Required Python packages: `aiohttp`, `beautifulsoup4`, `python-telegram-bot`
 - Heroku for deployment (Procfile file included in src).
-P.S. You can use other deployment frameworks, but they might not work. The last section `Comments for Deployment on Multi-Instance Platforms` in the README file might fix the issue.
+P.S. You can use other deployment platform, but they might not work. The last section `Comments for Deployment on Multi-Instance Platforms` in the README file might fix the issue.
 
 ## Installation
 
